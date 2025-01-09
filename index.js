@@ -1,193 +1,185 @@
 const EventEmitter = require('events');
 const sharp = require('sharp');
-const colorMap = require('./utils/captcha/colors.json');
+
+const initializations = require('./utils/initializations');
+const sortCoordinatesByProximity = require('./utils/sortCoordinatesByProximity');
+const { getImageKeys, getImageSize, getImageMapping } = require('./utils/imageUtils');
+const { getMetadataKeys, getImageBuffer } = require('./utils/itemUtils');
 
 class FlayerCaptcha extends EventEmitter {
     constructor(bot, options = { isStopped: false }) {
         super();
+
         this.bot = bot;
         this.isStopped = options.isStopped || false;
-
-        this.initializations();
-
-        this.yaws = { "2": '1', "3": '2', "5": '3', "0": '4' };
+        initializations.bind(this)();
     };
 
-    stop() { this.updateState(true) }
-    resume() { this.updateState(false) }
+    stop() { this.updateState(true); }
+    resume() { this.updateState(false); }
 
     updateState(isStopped) {
         if (this.isStopped != isStopped) {
             this.isStopped = isStopped;
-            this.setDefaultSettings();
+            this.resetState();
         }
     }
 
-    setDefaultSettings() {
-        this.img = {
-            maps: new Map(), images: [],
-            x: [], y: [], z: [],
-            yaw: null,
-        };
-        this.keys = this.getCorrectKeys();
+    resetState() {
+        this.metadataKeys = getMetadataKeys(this.bot);
+        this.timeoutId = null;
+        this.isSendedData = new Map();
+        this.idBuf = new Map();
+        this.idGeo = new Set();
+        this.viewDirectionGeo = new Map();
+        this.posYawData = new Map();
+        this.entities = new Map();
     }
 
-    isNotSupportedVersion() {
-        if (this.bot.registry.version['<=']('1.13.1') || this.bot.registry.version['>=']('1.20.5')) {
-            console.error(`Unsupported bot version: ${this.bot.version}`);
-            this.stop();
-        }
-    }
+    sendCompleteDataMap(updateData = false) {
+        if (this.timeoutId) clearTimeout(this.timeoutId);
 
-    getCorrectKeys() {
-        if (this.bot.registry.version['<=']('1.13.2')) {
-            return { keyRotate: 7, keyItem: 6 }
-        } else if (this.bot.registry.version['<=']('1.16.5')) {
-            return { keyRotate: 8, keyItem: 7 }
-        }
+        this.timeoutId = setTimeout(() => {
+            const isUpdateData = updateData !== false;
 
-        return { keyRotate: 9, keyItem: 8 };
-    }
+            const sendDatas = new Map();
 
-    isFilledMap(itemId) { return this.bot.registry.items[itemId]?.name == 'filled_map'; }
-    isFrame(entityType) {
-        const frames = new Set(['item_frame', 'item_frames', 'glow_item_frame']);
-        const entityName = this.bot.registry.entities[entityType]?.name;
-        return frames.has(entityName);
-    }
+            for (const [viewDirection, positions] of this.viewDirectionGeo) {
+                if (!positions.length || isUpdateData && updateData != viewDirection) continue;
 
-    initializations() {
-        this.bot._client.on('login', () => {
-            this.isNotSupportedVersion();
-            if (this.isStopped) return;
-            this.setDefaultSettings();
-        })
+                if (!sendDatas.has(viewDirection)) sendDatas.set(viewDirection, []);
+                const datas = sortCoordinatesByProximity(positions);
 
-        this.bot._client.on('packet', async (packet) => {
-            if (!packet || this.isStopped) return;
+                for (const index in datas) {
+                    sendDatas.get(viewDirection)[index] = {
+                        positions: new Map(),
+                        x: [], y: [], z: []
+                    };
+                    const sendData = sendDatas.get(viewDirection)[index];
+                    for (let position of datas[index]) {
+                        const id = this.posYawData.get(position)?.get(viewDirection)?.id;
+                        if (!this.idBuf.has(id)) return;
 
-            const { itemDamage, data, item } = packet;
-            if (data && typeof itemDamage == 'number') {
-                this.img.maps.set(itemDamage, data);
-            } else if (this.isFilledMap(item?.itemId)) {
+                        sendData.positions.set(position, id);
 
-                const idMap = item.nbtData ? item.nbtData.value.map.value : 0;
-                const imgBuf = await this.takeImgBuf(idMap);
-
-                this.img.images.push([{ x: 0, y: 0, z: 0 }, imgBuf, 0]);
-                this.createCaptchaImage();
+                        const { x, y, z } = position;
+                        sendData.x.push(x);
+                        sendData.y.push(y);
+                        sendData.z.push(z);
+                    };
+                }
             }
-        })
 
-        this.bot._client.on('entity_metadata', async ({ entityId, metadata }) => {
-            if (this.isStopped) return;
+            for (const [viewDirection, datas] of sendDatas) {
+                for (const data of datas) {
+                    const isNewData = !this.isSendedData.has(viewDirection);
+                    const isUnicData = this.isSendedData.get(viewDirection) !== JSON.stringify(data);
 
-            const { entityType, position, yaw } = this.bot.entities[entityId];
-            if (!this.isFrame(entityType)) return;
-
-            const itemData = metadata.find(v => v.key === this.keys.keyItem)?.value;
-
-            if (!this.isFilledMap(itemData?.itemId)) return;
-
-            this.img.y.push(position.y);
-            this.img.x.push(position.x);
-            this.img.z.push(position.z);
-
-            this.img.yaw = this.yaws[yaw.toFixed(0)];
-
-            const idMap = itemData.nbtData.value.map.value;
-            const imgBuf = await this.takeImgBuf(idMap);
-
-            const rotate = metadata.find(v => v.key === this.keys.keyRotate)?.value || 0;
-
-            this.img.images.push([position, imgBuf, rotate]);
-            this.createCaptchaImage();
-        })
+                    if (isNewData || isUpdateData || isUnicData) {
+                        this.isSendedData.set(viewDirection, JSON.stringify(data));
+                        this.createCaptchaImage(data, viewDirection);
+                    }
+                }
+            }
+        }, 10)
     }
 
-    async takeImgBuf(idMap) {
-        let imgBuf;
+    processingKeyDelete({ entityId = null, value, viewDirection }) {
+        if (entityId != null) {
+            if (!this.entities.has(entityId)) return;
+            var { value, viewDirection } = this.entities.get(entityId);
+        }
 
-        while (!imgBuf && !this.isStopped) {
-            imgBuf = this.img.maps.get(idMap);
-            if (!imgBuf) {
-                await this.sleep(100)
+        const oldId = this.posYawData.get(value)?.get(viewDirection)?.id;
+        if (oldId === undefined) return;
+
+        this.posYawData.get(value).delete(viewDirection);
+        this.isSendedData.delete(viewDirection);
+
+        const newData = this.viewDirectionGeo.get(viewDirection).filter(position => position !== value);
+
+        this.viewDirectionGeo.set(viewDirection, newData);
+        this.sendCompleteDataMap(viewDirection);
+    }
+
+    async updateDataMaps({ id, value, key, rotate, viewDirection, entityId }) {
+        if (key == 'rotate') {
+            if (!this.posYawData.has(value)) {
+                this.posYawData.set(value, new Map());
+            }
+
+            this.posYawData.get(value).set(viewDirection, { id, rotate });
+            return this.sendCompleteDataMap(viewDirection);
+        } else if (key == 'buf') {
+            const buffer = getImageBuffer(value);
+            if (this.idBuf.has(id)) {
+                if (this.idBuf.get(id).toString() === buffer.toString()) return true;
             };
+
+            this.idBuf.set(id, buffer);
+        } else if (key == 'pos') {
+            const response = this.processingKeyPos(id, value, viewDirection, entityId);
+            if (!this.posYawData.has(value)) {
+                this.posYawData.set(value, new Map());
+            }
+
+            this.posYawData.get(value).set(viewDirection, { id, rotate });
+            if (response) return;
         };
 
-        return imgBuf ? this.getImgBuf(imgBuf) : null;
+        if (this.idGeo.size > this.idBuf.size || !this.idGeo.has(id) || !this.idBuf.has(id)) return;
+        this.sendCompleteDataMap();
     }
 
-    async createCaptchaImage() {
-        if (this.isStopped || this.img.images.length !== this.img.maps.size || this.img.y.length > this.img.images.length) {
-            return
+    processingKeyPos(id, value, viewDirection, entityId) {
+        this.entities.set(entityId, { viewDirection, value });
+
+        const oldId = this.posYawData.get(value)?.get(viewDirection)?.id;
+        if (oldId == id) return true;
+
+        this.idGeo.add(id);
+
+        if (!this.viewDirectionGeo.has(viewDirection)) {
+            this.viewDirectionGeo.set(viewDirection, []);
         }
+        this.viewDirectionGeo.get(viewDirection).push(value);
+    }
 
-        let readImages = [];
+    async createCaptchaImage(data, viewDirection) {
+        const { widthMapping, heightMapping } = getImageMapping(data, viewDirection);
+        const { widthKey, heightKey } = getImageKeys(data, viewDirection);
+        const { width, height } = getImageSize(data, viewDirection);
 
-        for (const [_, imgBuf, rotate] of this.img.images) {
-            const imageBuffer = sharp(imgBuf, { raw: { width: 128, height: 128, channels: 4 } })
+        let images = [];
+
+        for (const [position, id] of data.positions) {
+            let rotate = this.posYawData.get(position).get(viewDirection).rotate;
+            if (['up'].includes(viewDirection)) rotate -= 2;
+
+            const image = this.idBuf.get(id);
+            const buffer = sharp(image, { raw: { width: 128, height: 128, channels: 4 } })
                 .rotate(90 * rotate).png().toBuffer();
-            readImages.push(imageBuffer);
+
+            images.push({ position, buffer });
         }
 
-        readImages = await Promise.all(readImages);
-
-        const key = new Set(this.img.x).size === 1 ? 'z' : 'x';
-        if (this.img.x.length && this.img.y.length) {
-            var { mapping: wMapping, value: width } = this.createCoordinateMappingAndValue(this.img[key]);
-            var { mapping: hMapping, value: height } = this.createCoordinateMappingAndValue(this.img.y, true);
-        } else {
-            var [hMapping, wMapping, width, height] = [new Map([[0, 0]]), new Map([[0, 0]]), 128, 128];
-        }
-
-        const composites = readImages.map((imageBuffer, i) => {
-            const [position] = this.img.images[i];
+        const composites = await Promise.all(images.map(async (image) => {
+            const buffer = await image.buffer;
+            const position = image.position;
             return {
-                input: imageBuffer,
-                left: wMapping.get(position.x),
-                top: hMapping.get(position.y)
+                left: widthMapping.get(position[widthKey]),
+                top: heightMapping.get(position[heightKey]),
+                input: buffer
             };
-        });
+        }));
 
-        const baseImage = await sharp({ create: { width, height, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } } })
-            .png().toBuffer();
+        const canvas = await sharp({
+            create: { width, height, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } }
+        }).png().toBuffer();
 
-        const image = sharp(baseImage).composite(composites);
-
-        this.setDefaultSettings();
-        this.emit('success', image);
+        const image = sharp(canvas).composite(composites);
+        this.emit('success', image, viewDirection);
     }
-
-    createCoordinateMappingAndValue(values, type = false) {
-        const sortOrder = !type && (this.img.yaw == 1 || this.img.yaw == 2) ? (a, b) => a - b : (a, b) => b - a;
-
-        const uniqueValues = [...new Set(values)];
-        const sortValues = uniqueValues.sort(sortOrder);
-
-        const maxValue = sortValues[0];
-        const minValue = uniqueValues[sortValues.length - 1];
-
-        const value = Math.abs(maxValue - minValue) + 1;
-        const mapping = new Map(sortValues.map((val, index) => [val, index * 128]));
-
-        return { mapping, value: value * 128 };
-    }
-
-    getImgBuf(buf) {
-        const imgBuf = new Uint8ClampedArray(65536);
-        const cache = new Map();
-
-        buf.forEach((color, i) => {
-            const colorArr = cache.get(color) || colorMap[color];
-            cache.set(color, colorArr);
-            imgBuf.set(colorArr, i * 4);
-        });
-
-        return imgBuf;
-    }
-
-    sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 };
 
 module.exports = FlayerCaptcha;
