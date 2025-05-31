@@ -1,6 +1,6 @@
 {
   "name": "flayercaptcha",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "main": "index.js",
   "repository": {
     "type": "git",
@@ -9,7 +9,7 @@
   "author": "ImPhoba",
   "license": "MIT",
   "dependencies": {
-    "sharp": "^0.33.5"
+    "sharp": "^0.34.2"
   },
   "keywords": [
     "mineflayer",
