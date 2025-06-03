@@ -1,6 +1,6 @@
 {
   "name": "flayercaptcha",
-  "version": "1.0.2",
+  "version": "1.0.5",
   "main": "index.js",
   "repository": {
     "type": "git",

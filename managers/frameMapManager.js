@@ -97,8 +97,13 @@ class FrameMapManager extends ImageHandler {
             const { viewDirection, coordinate } = this.getEntityFrameData(frameId);
 
             this.#entityFramesData.delete(frameId);
+            if (this.#timeoutIds[viewDirection]) {
+                clearTimeout(this.#timeoutIds[viewDirection])
+            }
 
-            this.processFrames(this.#entityFramesData, viewDirection, coordinate);
+            this.#timeoutIds[viewDirection] = setTimeout(() => {
+                this.processFrames(this.#entityFramesData, viewDirection, coordinate);
+            }, this.mapManager.delay);
         }
     }
 
