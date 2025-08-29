@@ -29,10 +29,7 @@ class PacketHandler extends MapManager {
         }
     }
 
-    #login() {
-        this.resetState();
-        this.metadataKeys = ItemUtils.getMetadataKeys(this.bot);
-    }
+    #login() { this.resetState(); }
 
     #packet({ itemDamage, data, ...packet } = {}) {
         // Received a map image
@@ -60,6 +57,8 @@ class PacketHandler extends MapManager {
     #entityMetadata({ entityId, metadata }) {
         const entity = this.bot.entities[entityId];
         if (!entity || !EntityUtils.isEntityFrame(this.bot, entity.entityType)) return;
+
+        if (!this.metadataKeys) this.metadataKeys = ItemUtils.getMetadataKeys(this.bot);
 
         const oldMapItem = entity.metadata.find(meta => ItemUtils.isFilledMap(this.bot, meta));
         const newMapItem = metadata.find(v => v.key === this.metadataKeys.item)?.value;
@@ -92,7 +91,7 @@ class PacketHandler extends MapManager {
                 rotate: itemRotate ?? entityRotate ?? 0,
                 coordinate: position,
                 viewDirection,
-                nbtData: newMapItem && newMapItem.nbtData || oldMapItem && oldMapItem.nbtData || null
+                nbtData: newMapItem?.nbtData || oldMapItem?.nbtData || null
             });
         }
     }

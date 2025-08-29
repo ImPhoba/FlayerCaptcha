@@ -102,7 +102,7 @@ class FrameMapManager extends ImageHandler {
             }
 
             this.#timeoutIds[viewDirection] = setTimeout(() => {
-                this.processFrames(this.#entityFramesData, viewDirection, coordinate);
+                if (this.#entityFramesData.size) this.processFrames(this.#entityFramesData, viewDirection, coordinate);
             }, this.mapManager.delay);
         }
     }
@@ -132,7 +132,7 @@ class FrameMapManager extends ImageHandler {
         }
 
         this.#timeoutIds[viewDirection] = setTimeout(() => {
-            this.processFrames(this.#entityFramesData, viewDirection);
+            if (this.#entityFramesData.size) this.processFrames(this.#entityFramesData, viewDirection);
         }, this.mapManager.delay);
 
         const image = this.createImage(mapImageBuffer, rotate);

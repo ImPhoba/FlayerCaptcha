@@ -2,9 +2,15 @@ const colorData = require('./captcha/colors.json');
 
 class ItemUtils {
     static #colorMap = new Map(Object.entries(colorData));
+    static #versionFixes = {
+        '1.13.1': 'melon_seeds',
+        '1.21.3': 'glow_ink_sac'
+    };
 
     static getMetadataKeys(bot) {
         const version = bot.registry.version;
+
+        if (version['>=']('1.21.6')) return { rotate: 10, item: 9 };
         if (version['<=']('1.8.9') || version['>=']('1.17')) return { rotate: 9, item: 8 };
         if (version['>=']('1.14') && version['<=']('1.16.5')) return { rotate: 8, item: 7 };
         if (version['>=']('1.10') && version['<=']('1.13.2')) return { rotate: 7, item: 6 };
@@ -24,9 +30,8 @@ class ItemUtils {
         const itemId = item.itemId || item.blockId;
         const itemName = bot.registry.items[itemId]?.name;
 
-        //  fix for version 1.13.1
-        return bot.version == '1.13.1' ?
-            itemName == 'melon_seeds' :
+        return this.#versionFixes[bot.version] ?
+            this.#versionFixes[bot.version] == itemName :
             itemName == 'filled_map';
     }
 
